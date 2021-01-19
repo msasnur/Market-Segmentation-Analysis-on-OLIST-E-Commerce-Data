@@ -1,0 +1,162 @@
+---
+title: "k-means"
+author: "Harika"
+date: "4/25/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+#libraries used
+
+library(lubridate) # To work with dates and times
+library(dplyr)     # To manipulate the datasets
+library(tidyverse) # To design grammar,data structures
+library(caret)     # To steamline the process for predicting models
+library(factoextra)# To extract and visualize the results of data analyses
+```{r}
+library(lubridate)
+library(dplyr)
+library(tidyverse)
+library(caret)
+library(factoextra)
+```
+
+#import data
+```{r}
+raw_data <- read.csv("C:/Users/hpenj/OneDrive/Desktop/evg_AIP/inner_join_cop.csv")  #Importing the data from the local drive
+data <- raw_data  #Saved as the raw_data to data name
+```
+
+#data cleaning
+```{r}
+#data <- data %>%  rename(customer_id = ï..customer_id)    #renaming the customer_id
+
+data$order_date <- as.Date(data$order_purchase_timestamp,format = "%d-%m-%y")   #date format 
+
+colSums(is.na(data))    #missing values of each columns
+
+analysis_date <- lubridate::as_date('2018-10-18') #Analysis date for calculating recency 
+
+#length(unique(data$customer_id))                      #unique customer_id 
+#length(unique(data$customer_unique_id))               
+#length(unique(data$order_date))
+
+
+#removing any negative values in payment 
+data_clean <- data %>% mutate(Amount = replace(payment_value, payment_value<=0, NA))
+data_clean <- data_clean %>% drop_na()
+
+#Total value of the order is product of installments and value
+data_rfm <- data_clean %>% mutate(payment= payment_installments *payment_value)
+```
+
+# calculating rfm values
+Recency : How recently purchase made by customers(Days of inactivity)
+Frequency : How often customer makes a purchase (Number of purchases)
+Monetary : How much money customer spends on purchase (Revenue generated)
+```{r}
+RFM <- data_rfm %>% group_by(customer_unique_id) %>% 
+  summarise(recency=as.numeric(analysis_date-max(order_date)),
+            frequency=n(), monetary = sum(payment)) 
+```
+Next step after calculating  the RFM values is to cluster the customers accordingly
+Here we are usng K-means clustering,in order to proceed clustering analysis we need to know the distribution and also perform scaling.
+#Transformation and scaling
+```{r}
+#Histogram of the RFM values
+hist(RFM$recency)
+hist(RFM$frequency)
+hist(RFM$monetary)
+
+#Log transformation 
+RFM$recency.log <- log(RFM$recency)
+RFM$frequency.log <- log(RFM$frequency)
+RFM$monetary.log <- RFM$monetary + 0.1 # can't take log(0), so add a small value to remove zeros
+RFM$monetary.log <- log(RFM$monetary.log)
+
+#Scaling the data 
+RFM$recency.z <- scale(RFM$recency.log, center=TRUE, scale=TRUE)
+RFM$frequency.z <- scale(RFM$frequency.log, center=TRUE, scale=TRUE)
+RFM$monetary.z <- scale(RFM$monetary.log, center=TRUE, scale=TRUE)
+```
+
+#plots for any outliers
+```{r}
+#ggplot for log transforamtion values
+plot_log <- ggplot(RFM, aes(x = frequency.log, y = monetary.log))+ geom_point(aes(colour = recency.log))+ scale_colour_gradient(name="Log-transformed Recency")+xlab("Log-transformed Frequency")+ ylab("Log-transformed Monetary Value")
+plot_log
+#scatter<- scatter + geom_point(aes(colour = recency.log))
+#scatter <- scatter + scale_colour_gradient(name="Log-transformed Recency")
+#scatter<- scatter+ xlab("Log-transformed Frequency")
+#scatter <- scatter + ylab("Log-transformed Monetary Value")
+#scatter
+
+#ggplot for scaled values
+plot_z <- ggplot(RFM, aes(x = frequency.z, y = monetary.z))+ geom_point(aes(colour = recency.z))+ scale_colour_gradient(name=" Recency")+ xlab(" Frequency") + ylab("Monetary Value")
+plot_z
+#scatter1 <- scatter1 + geom_point(aes(colour = recency.z))
+
+#scatter1 <- scatter1 + scale_colour_gradient(name="Z-scored Recency")
+#scatter1 <- scatter1 + xlab("Z-scored Frequency")
+#scatter1 <- scatter1 + ylab("Z-scored Monetary Value of Customer")
+#scatter1
+```
+
+#remove outliers
+```{r}
+
+RFM <- RFM %>% filter(monetary.log >0 )
+```
+
+#wss and kmeans
+Apply K-means algorithm
+```{r}
+set.seed(123)
+RFM_z <- RFM[,c(8:10)] #Filtering required columnss for analysis
+# function to compute total within-cluster sum of square 
+wss <- function(k) {
+  kmeans(RFM_z, k, nstart = 10 )$tot.withinss
+}
+
+# Compute and plot wss for k = 2 to k = 7
+k.values <- 2:7
+
+# extract wss for 2-7 clusters
+wss_values <- map_dbl(k.values, wss)
+
+plot(k.values, wss_values,
+       type="b", pch = 19, frame = FALSE, 
+       xlab="Number of clusters",
+       ylab="Total within-clusters sum of squares(wss)")
+
+model <- kmeans(RFM_z, centers = 4, iter.max = 500, nstart = 10) 
+#model
+
+RFM$Cluster <- as.factor(model$cluster)
+
+
+KMeans_Results <- RFM %>%
+  group_by(Cluster) %>%
+  summarise(
+            'Recency Mean' = round(mean(recency)),
+            'Frequency Mean' = scales::comma(round(mean(frequency))),
+            'Monetary Mean' = scales::dollar(round(mean(monetary))),
+           
+            )
+
+DT::datatable((KMeans_Results),
+              rownames = FALSE) # Display cluster means to identify their value to the business
+```
+
+#Exporting data to local drive
+```{r}
+data_output <- inner_join(RFM,data_rfm)
+write.csv(data_output,"C:/Users/hpenj/OneDrive/Desktop/evg_AIP/data_output3.csv")
+
+
+```
+
+
